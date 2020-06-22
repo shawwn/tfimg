@@ -16,7 +16,7 @@ def clamp(v, min=0., max=1.):
 
 
 @op_scope
-def wrap(v, wrap_mode):
+def wrap(v, wrap_mode="reflect"):
   assert wrap_mode in ["clamp", "wrap", "reflect"]
   if wrap_mode == "wrap":
     return tf.math.floormod(v, 1.0)
@@ -25,20 +25,72 @@ def wrap(v, wrap_mode):
   elif wrap_mode == "clamp":
     return clamp(v)
 
+def anum(u):
+  return isinstance(u, float) or isinstance(u, int)
 
 @op_scope
 def iround(u):
-  return i32(tf.math.floordiv(f32(u), 1.0))
+  if anum(u):
+    return u // 1.0
+  else:
+    return i32(tf.math.floordiv(f32(u), 1.0))
+
+
+@op_scope
+def lsh(u, by):
+  if anum(u) and anum(by):
+    return int(u) << by
+  else:
+    return tf.bitwise.left_shift(u, by)
+
+
+@op_scope
+def rsh(u, by):
+  if anum(u) and anum(by):
+    return int(u) >> by
+  else:
+    return tf.bitwise.right_shift(u, by)
+
+import numpy as np
+
+@op_scope
+def sign(u):
+  if anum(u):
+    return np.sign(u)
+  else:
+    return tf.sign(u)
+
+
+@op_scope
+def min3(a, b, c):
+  if anum(a) and anum(b) and anum(c):
+    return min(a, b, c)
+  else:
+    return tf.minimum(a, tf.minimum(b, c))
+
+
+@op_scope
+def max3(a, b, c):
+  if anum(a) and anum(b) and anum(c):
+    return max(a, b, c)
+  else:
+    return tf.maximum(a, tf.maximum(b, c))
 
 
 @op_scope
 def f32(u):
-  return tf.cast(u, tf.float32)
+  if anum(u):
+    return float(u)
+  else:
+    return tf.cast(u, tf.float32)
 
 
 @op_scope
 def i32(u):
-  return tf.cast(u, tf.int32)
+  if anum(u):
+    return int(u)
+  else:
+    return tf.cast(u, tf.int32)
 
 
 @op_scope
@@ -46,7 +98,8 @@ def sample(tex, uv, method="bilinear", wrap_mode="reflect"):
   assert method in ["nearest", "bilinear"]
   #wh = tf.shape(tex if unpack else tex[:, :, 0])
   wh = tf.shape(tex[:, :, 0])
-  get = lambda u, v: tf.gather_nd(tex, tf.stack([
+  #get = lambda u, v: tf.gather_nd(tex, tf.stack([
+  get = lambda u, v: tf.raw_ops.GatherNd(params=tex, indices=tf.stack([
     clamp(wh[0] - iround(u), 0, wh[0] - 1),
     clamp(wh[1] - iround(v), 0, wh[1] - 1),
     ], 1))
@@ -137,8 +190,9 @@ def resize(img, size, preserve_aspect_ratio=False, method="area", wrap_mode="ref
   UV_01 = tf.stack([UV_00[:, 0], UV_11[:, 1]], 1)
   UV_10 = tf.stack([UV_11[:, 0], UV_00[:, 1]], 1)
 
-  cs = lambda i: tf.cumsum(tf.cumsum(f32(img[:, :, i]), 0, exclusive=False), 1, exclusive=False) 
-  img_sum = tf.stack([cs(0), cs(1), cs(2)], 2)
+  #cs = lambda i: tf.cumsum(tf.cumsum(f32(img[:, :, i]), 0, exclusive=False), 1, exclusive=False) 
+  #img_sum = tf.stack([cs(0), cs(1), cs(2)], 2)
+  img_sum = tf.cumsum(tf.cumsum(f32(img), 0), 1)
 
   tex_00 = f32(sample(img_sum, UV_00, "bilinear"))
   tex_10 = f32(sample(img_sum, UV_10, "bilinear"))
