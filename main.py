@@ -1,9 +1,11 @@
 import tensorflow as tf
+import functools
 
 
 def op_scope(fn, name=None):
     if name is None:
         name = fn.__name__
+    @functools.wraps(fn)
     def _fn(*args, **kwargs):
         with tf.name_scope(fn.__name__):
             return fn(*args, **kwargs)
@@ -12,7 +14,10 @@ def op_scope(fn, name=None):
 
 @op_scope
 def clamp(v, min=0., max=1.):
-  return tf.clip_by_value(v, min, max)
+  if anum(v):
+    return np.clip(v, min, max)
+  else:
+    return tf.clip_by_value(v, min, max)
 
 
 @op_scope
@@ -25,8 +30,12 @@ def wrap(v, wrap_mode="reflect"):
   elif wrap_mode == "clamp":
     return clamp(v)
 
+def aten(u):
+  return tf.is_tensor(u)
+
 def anum(u):
   return isinstance(u, float) or isinstance(u, int)
+
 
 @op_scope
 def iround(u):
@@ -59,6 +68,21 @@ def sign(u):
     return np.sign(u)
   else:
     return tf.sign(u)
+
+@op_scope
+def min2(a, b):
+  if anum(a) and anum(b):
+    return min(a, b)
+  else:
+    return tf.minimum(a, b)
+
+
+@op_scope
+def max2(a, b):
+  if anum(a) and anum(b):
+    return max(a, b)
+  else:
+    return tf.maximum(a, b)
 
 
 @op_scope
@@ -96,12 +120,11 @@ def i32(u):
 @op_scope
 def sample(tex, uv, method="bilinear", wrap_mode="reflect"):
   assert method in ["nearest", "bilinear"]
-  #wh = tf.shape(tex if unpack else tex[:, :, 0])
   wh = tf.shape(tex[:, :, 0])
   #get = lambda u, v: tf.gather_nd(tex, tf.stack([
   get = lambda u, v: tf.raw_ops.GatherNd(params=tex, indices=tf.stack([
-    clamp(wh[0] - iround(u), 0, wh[0] - 1),
-    clamp(wh[1] - iround(v), 0, wh[1] - 1),
+    clamp(iround(u), 0, wh[0] - 1),
+    clamp(iround(v), 0, wh[1] - 1),
     ], 1))
   uv = wrap(uv, wrap_mode)
   u = uv[:, 0]
@@ -165,6 +188,7 @@ def resize(img, size, preserve_aspect_ratio=False, method="area", wrap_mode="ref
     tf.reshape(x, [-1]) / f32(size[1]),
     #tf.zeros([num_frags], dtype=tf.float32)
     ], axis=1)
+
   re = lambda out: tf.transpose(tf.reshape(out, [size[1], size[0], 3]), [1,0,2])
   if method == "nearest" or method == "bilinear":
     return re(sample(img, uv, method=method, wrap_mode=wrap_mode))
@@ -183,28 +207,23 @@ def resize(img, size, preserve_aspect_ratio=False, method="area", wrap_mode="ref
     uv_00[:, 1] + 1.0 / size[1],
     ], axis=1)
   wh = f32(tf.shape(img[:, :, 0]))
-  R = wh[0]*(uv_11[:, 0] - uv_00[:, 0]) * wh[1]*(uv_11[:, 1] - uv_00[:, 1])
 
   UV_00 = tf.reduce_min([uv_00, uv_10, uv_01, uv_11], axis=0)
   UV_11 = tf.reduce_max([uv_00, uv_10, uv_01, uv_11], axis=0)
   UV_01 = tf.stack([UV_00[:, 0], UV_11[:, 1]], 1)
   UV_10 = tf.stack([UV_11[:, 0], UV_00[:, 1]], 1)
 
-  #cs = lambda i: tf.cumsum(tf.cumsum(f32(img[:, :, i]), 0, exclusive=False), 1, exclusive=False) 
-  #img_sum = tf.stack([cs(0), cs(1), cs(2)], 2)
   img_sum = tf.cumsum(tf.cumsum(f32(img), 0), 1)
 
   tex_00 = f32(sample(img_sum, UV_00, "bilinear"))
   tex_10 = f32(sample(img_sum, UV_10, "bilinear"))
   tex_01 = f32(sample(img_sum, UV_01, "bilinear"))
   tex_11 = f32(sample(img_sum, UV_11, "bilinear"))
-  #den = tf.cond(tf.greater(tf.shape(R)[0], 1), lambda: R, lambda: size[0]*size[1])
-  #den = tf.reduce_prod(R)
-  den = R
-  #print(tf.get_default_session().run(den), tf.get_default_session().run(den).shape)
-  out = clamp(re(tex_11 - tex_10 - tex_01 + tex_00) / den[0], 0.0, 255.0)
-  #out = tf.reshape(out, [size[0], size[1], 3])
-  #import pdb; pdb.set_trace()
+
+  R = wh[0]*(uv_11[:, 0] - uv_00[:, 0]) * wh[1]*(uv_11[:, 1] - uv_00[:, 1])
+
+  out = re(tex_11 - tex_10 - tex_01 + tex_00) / R[0]
+  out = clamp(out, 0.0, 255.0)
   return out
 
 
@@ -222,4 +241,4 @@ if __name__ == "__main__":
   img2 = sess.run(resize(img, [w, h], method=method, wrap_mode=wrap_mode))
   with open(args[1], 'wb') as f:
     f.write(sess.run(tf.image.encode_png(img2)))
-    
+
