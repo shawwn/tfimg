@@ -1,6 +1,5 @@
 import sys
 import os
-sys.path.append(os.path.expanduser('~/ml/tf.rasterizer'))
 import m
 import tensorflow as tf
 
@@ -15,8 +14,15 @@ class SPolygonVertex:
     self.position.assign(rhs.position)
     self.uv.assign(rhs.uv)
 
+def tf32(x):
+  return tf.cast( x, tf.float32 )
+
+def ti32(x):
+  return tf.cast( x, tf.int32 )
+
 def fix28_4(u):
-  return main.iround(16.0 * u)
+  return main.iround(16.0 * tf32(u))
+  #return main.iround(16.0 * u)
 
 def backbuffer(width, height, channels=4, dtype='f32', fill=128.0, lib=None):
   if lib is tf or lib is None and (tf.is_tensor(width) or tf.is_tensor(height)):
@@ -33,39 +39,43 @@ class Rasterizer:
     self.tex0 = None
 
   def draw(self, vertices, color=None):
-    verts = [m.MVec3() for _ in range(3)]
 
-    verts[0].x = vertices[0].position.x
-    verts[0].y = vertices[0].position.y
-    verts[1].x = vertices[1].position.x
-    verts[1].y = vertices[1].position.y
-    verts[2].x = vertices[2].position.x
-    verts[2].y = vertices[2].position.y
+    X1 = tf32( vertices[0].position.x )
+    X2 = tf32( vertices[1].position.x )
+    X3 = tf32( vertices[2].position.x )
 
-    # 28.4 fixed-point coordinates
-    Y1 = fix28_4( ( 0.5 * verts[ 0 ].y + 0.5 ) * self.height - 0.5)
-    Y2 = fix28_4( ( 0.5 * verts[ 1 ].y + 0.5 ) * self.height - 0.5)
-    Y3 = fix28_4( ( 0.5 * verts[ 2 ].y + 0.5 ) * self.height - 0.5)
-    X1 = fix28_4( ( 0.5 * verts[ 0 ].x + 0.5 ) * self.width - 0.5)
-    X2 = fix28_4( ( 0.5 * verts[ 1 ].x + 0.5 ) * self.width - 0.5)
-    X3 = fix28_4( ( 0.5 * verts[ 2 ].x + 0.5 ) * self.width - 0.5)
+    Y1 = tf32( vertices[0].position.y )
+    Y2 = tf32( vertices[1].position.y )
+    Y3 = tf32( vertices[2].position.y )
 
-    # Bounding rectangle
-    minx = main.rsh((main.min3(X1, X2, X3) + 0xF), 4)
-    maxx = main.rsh((main.max3(X1, X2, X3) + 0xF), 4)
-    miny = main.rsh((main.min3(Y1, Y2, Y3) + 0xF), 4)
-    maxy = main.rsh((main.max3(Y1, Y2, Y3) + 0xF), 4)
-    minx = main.max2(minx, 0)
-    maxx = main.min2(maxx, self.width)
-    miny = main.max2(miny, 0)
-    maxy = main.min2(maxy, self.height)
-    # minx = 0
-    # maxx = self.width
-    # miny = 0
-    # maxy = self.height
+    U1 = tf32( vertices[0].uv.x )
+    U2 = tf32( vertices[1].uv.x )
+    U3 = tf32( vertices[2].uv.x )
 
-    # calculate the height.
-    height = maxy - miny
+    V1 = tf32( vertices[0].uv.y )
+    V2 = tf32( vertices[1].uv.y )
+    V3 = tf32( vertices[2].uv.y )
+
+    W = ti32( self.width )
+    H = ti32( self.height )
+
+    # # 28.4 fixed-point coordinates
+    Y1 = fix28_4( ( 0.5 * Y1 + 0.5 ) * tf32( H ) - 0.5 )
+    Y2 = fix28_4( ( 0.5 * Y2 + 0.5 ) * tf32( H ) - 0.5 )
+    Y3 = fix28_4( ( 0.5 * Y3 + 0.5 ) * tf32( H ) - 0.5 )
+    X1 = fix28_4( ( 0.5 * X1 + 0.5 ) * tf32( W ) - 0.5 )
+    X2 = fix28_4( ( 0.5 * X2 + 0.5 ) * tf32( W ) - 0.5 )
+    X3 = fix28_4( ( 0.5 * X3 + 0.5 ) * tf32( W ) - 0.5 )
+
+    # # Bounding rectangle
+    # minx = main.rsh((main.min3(X1, X2, X3) + 0xF), 4)
+    # maxx = main.rsh((main.max3(X1, X2, X3) + 0xF), 4)
+    # miny = main.rsh((main.min3(Y1, Y2, Y3) + 0xF), 4)
+    # maxy = main.rsh((main.max3(Y1, Y2, Y3) + 0xF), 4)
+    # minx = main.max2(minx, 0)
+    # maxx = main.min2(maxx, W)
+    # miny = main.max2(miny, 0)
+    # maxy = main.min2(maxy, H)
 
     # calculate edges.
     EX1 = main.f32(X2 - X1) / 16.0
@@ -116,45 +126,35 @@ class Rasterizer:
     # dc/dy = ---------------------------------------------
     #         (x3 - x1) * (y2 - y1) - (x2 - x1) * (y3 - y1)
 
-    U1 = vertices[0].uv.x
-    U2 = vertices[1].uv.x
-    U3 = vertices[2].uv.x
-
-    V1 = vertices[0].uv.y
-    V2 = vertices[1].uv.y
-    V3 = vertices[2].uv.y
-
     EU1 = U2 - U1
     EU2 = U3 - U1
 
     EV1 = V2 - V1
     EV2 = V3 - V1
 
-    # DUDX = EU2 * EY1 - EU1 * EY2
-    # DVDX = EV2 * EY1 - EV1 * EY2
-    # DUDY = EU1 * EX2 - EU2 * EX1
-    # DVDY = EV1 * EX2 - EV2 * EX1
-    # DETR = EX2 * EY1 - EX1 * EY2
-    # DUDX /= DETR
-    # DVDX /= DETR
-    # DUDY /= DETR
-    # DVDY /= DETR
+    DUDX = EU2 * EY1 - EU1 * EY2
+    DVDX = EV2 * EY1 - EV1 * EY2
+    DUDY = EU1 * EX2 - EU2 * EX1
+    DVDY = EV1 * EX2 - EV2 * EX1
+    DETR = EX2 * EY1 - EX1 * EY2
+    DUDX /= DETR
+    DVDX /= DETR
+    DUDY /= DETR
+    DVDY /= DETR
 
-    DUDX = (U3 - U1) * (Y2 - Y1) - (U2 - U1) * (Y3 - Y1)
-    DVDX = (V3 - V1) * (Y2 - Y1) - (V2 - V1) * (Y3 - Y1)
-    DUDY = (U2 - U1) * (X3 - X1) - (U3 - U1) * (X2 - X1)
-    DVDY = (V2 - V1) * (X3 - X1) - (V3 - V1) * (X2 - X1)
-    DETR = (X3 - X1) * (Y2 - Y1) - (X2 - X1) * (Y3 - Y1)
-    DUDX /= DETR / 16
-    DVDX /= DETR / 16
-    DUDY /= DETR / 16
-    DVDY /= DETR / 16
+    # DUDX = (U3 - U1) * (Y2 - Y1) - (U2 - U1) * (Y3 - Y1)
+    # DVDX = (V3 - V1) * (Y2 - Y1) - (V2 - V1) * (Y3 - Y1)
+    # DUDY = (U2 - U1) * (X3 - X1) - (U3 - U1) * (X2 - X1)
+    # DVDY = (V2 - V1) * (X3 - X1) - (V3 - V1) * (X2 - X1)
+    # DETR = (X3 - X1) * (Y2 - Y1) - (X2 - X1) * (Y3 - Y1)
+    # DETR = main.f32(DETR)
+    # DUDX /= DETR / 16.0
+    # DVDX /= DETR / 16.0
+    # DUDY /= DETR / 16.0
+    # DVDY /= DETR / 16.0
 
-    U = U1 - DUDX*X1/16 - DUDY*Y1/16 
-    V = V1 - DVDX*X1/16 - DVDY*Y1/16 
-
-    color = tf.fill([self.height, self.width, 4], 128.0) if color is None else color
-    x, y = tf.meshgrid( tf.range(minx, maxx), tf.range(miny, maxy))
+    color = tf.fill([H, W, 4], 128.0) if color is None else color
+    x, y = tf.meshgrid( tf.range( 0, W ), tf.range( 0, H ) )
     p = tf.stack([y, x],2)
 
     h, w, _ = p.shape.as_list()
@@ -162,7 +162,12 @@ class Rasterizer:
     valid1 = C1 + DX12 * y*16 - DY12 * x*16
     valid2 = C2 + DX23 * y*16 - DY23 * x*16
     valid3 = C3 + DX31 * y*16 - DY31 * x*16
-    valid = tf.greater(main.sign(valid1) * main.sign(valid2) * main.sign(valid3), 0)
+    #valid = tf.greater(main.min3(main.sign(valid1), main.sign(valid2), main.sign(valid3)), 0)
+    valid = tf.equal(main.sign(valid1) + main.sign(valid2) + main.sign(valid3), 3)
+
+    # Calculate UV at screen origin.
+    U = U1 - DUDX*tf32(X1)/16 - DUDY*tf32(Y1)/16 
+    V = V1 - DVDX*tf32(X1)/16 - DVDY*tf32(Y1)/16 
 
     u  = tf.cumsum(tf.fill([h, w], DUDX), 1)
     u += tf.cumsum(tf.fill([h, w], DUDY), 0)
@@ -180,9 +185,9 @@ class Rasterizer:
     R, G, B = tf.unstack(
         tf.gather_nd(tex0,
           main.clamp(
-            main.iround(main.wrap(uv - [0.00/th, 0.00/tw], "reflect") * [tw, th]),
+            main.iround(main.wrap(uv, "reflect") * [tw, th]),
             0, [tw-1, th-1])),
-          axis=1)
+          axis=-1)
 
     A = tf.ones_like(R) * 255
     frag_color = tf.stack([R, G, B, A], 1)
@@ -192,6 +197,29 @@ class Rasterizer:
 
     return color
 
+
+import numpy as np
+
+
+def rotation(x, y, z):
+    sin_x, sin_y, sin_z = np.sin([x, y, z])
+    cos_x, cos_y, cos_z = np.cos([x, y, z])
+    return [
+        [
+            cos_x * cos_y,
+            cos_x * sin_y * sin_z - sin_x * cos_z,
+            cos_x * sin_y * cos_z + sin_x * sin_z,
+            0.
+        ],
+        [
+            sin_x * cos_y,
+            sin_x * sin_y * sin_z + cos_x * cos_z,
+            sin_x * sin_y * cos_z - cos_x * sin_z,
+            0.
+        ],
+        [-sin_y, cos_y * sin_z, cos_y * cos_z, 0.],
+        [0., 0., 0., 1.]
+    ]
 
 
 if __name__ == "__main__":
@@ -214,8 +242,11 @@ if __name__ == "__main__":
   w = 160
   h = 160
   th = m.deg_to_rad(0.0)
-  import utils
-  rot = m.MMat4x4(utils.rotation(th, 0.0, 0.0)).rotate
+  rot = m.MMat4x4(rotation(th, 0.0, 0.0))
+  rot.scale = 2.0 * rot.scale
+  rot.translate = 0.5 + rot.translate
+  #rot = m.MMat3x3()
+  idn = m.MMat4x4()
   rast = Rasterizer(w, h)
   rast.tex0 = img
 
@@ -228,33 +259,103 @@ if __name__ == "__main__":
   v1.position.assign([-1.0, 1.0,0]); v1.uv.assign([0.0, 1.0, 0])
   v2.position.assign([ 1.0, 1.0,0]); v2.uv.assign([1.0, 1.0, 0])
   #color = rast.draw([v0, v1, v2], color)
-  #v0.position.assign([-0.5,0.0,0]); v0.uv.assign(rot.rotate_point([0.5, 0.0, 0]))
-  #v1.position.assign([0.3,0.0,0]); v1.uv.assign(rot.rotate_point([0.3, 0.0, 0]))
-  #v2.position.assign([0.0,1.0,0]); v2.uv.assign(rot.rotate_point([0.0, 1.0, 0]))
+  #v0.position.assign([-0.5,0.0,0]); v0.uv.assign(rot.transform_coord_no_persp([0.5, 0.0, 0]))
+  #v1.position.assign([0.3,0.0,0]); v1.uv.assign(rot.transform_coord_no_persp([0.3, 0.0, 0]))
+  #v2.position.assign([0.0,1.0,0]); v2.uv.assign(rot.transform_coord_no_persp([0.0, 1.0, 0]))
 
-  v0.position.assign([ 0.5,-0.5,0]); v0.uv.assign(rot.rotate_point([2.0, 0.0, 0]))
-  v1.position.assign([-0.5, 0.5,0]); v1.uv.assign(rot.rotate_point([0.0, 2.0, 0]))
-  v2.position.assign([ 0.5, 0.5,0]); v2.uv.assign(rot.rotate_point([2.0, 2.0, 0]))
-  color = rast.draw([v0, v1, v2], color)
-  v0.position.assign(rot.rotate_point([-0.5,-0.5,0])); v0.uv.assign([0.0, 0.0, 0])
-  v1.position.assign(rot.rotate_point([ 0.5,-0.5,0])); v1.uv.assign([2.0, 0.0, 0])
-  v2.position.assign(rot.rotate_point([-0.5, 0.5,0])); v2.uv.assign([0.0, 2.0, 0])
-  color = rast.draw([v0, v1, v2], color)
+  if False:
+    v0.position.assign([2* 0.5,2*-0.5,0]); v0.uv.assign(rot.transform_coord_no_persp([2.0, 0.0, 0]))
+    v1.position.assign([2*-0.5,2* 0.5,0]); v1.uv.assign(rot.transform_coord_no_persp([0.0, 2.0, 0]))
+    v2.position.assign([2* 0.5,2* 0.5,0]); v2.uv.assign(rot.transform_coord_no_persp([2.0, 2.0, 0]))
+    color = rast.draw([v0, v1, v2], color)
+    v0.position.assign(rot.transform_coord_no_persp([2*-0.5,2*-0.5,0])); v0.uv.assign([0.0, 0.0, 0])
+    v1.position.assign(rot.transform_coord_no_persp([2* 0.5,2*-0.5,0])); v1.uv.assign([2.0, 0.0, 0])
+    v2.position.assign(rot.transform_coord_no_persp([2*-0.5,2* 0.5,0])); v2.uv.assign([0.0, 2.0, 0])
+    color = rast.draw([v0, v1, v2], color)
+  elif False:
+    v0.position.assign(idn.transform_coord_no_persp([ 1.00,-1.00,0])); v0.uv.assign(rot.transform_coord_no_persp([0.75, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([-1.00, 1.00,0])); v1.uv.assign(rot.transform_coord_no_persp([0.25, 0.75, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([ 1.00, 1.00,0])); v2.uv.assign(rot.transform_coord_no_persp([0.75, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
+    v0.position.assign(idn.transform_coord_no_persp([-1.00,-1.00,0])); v0.uv.assign(rot.transform_coord_no_persp([0.25, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([ 1.00,-1.00,0])); v1.uv.assign(rot.transform_coord_no_persp([0.75, 0.25, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([-1.00, 1.00,0])); v2.uv.assign(rot.transform_coord_no_persp([0.25, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
+  elif False:
+    v0.position.assign(idn.transform_coord_no_persp([ 1.00,-1.00,0])); v0.uv.assign(idn.transform_coord_no_persp([0.75, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([-1.00, 1.00,0])); v1.uv.assign(idn.transform_coord_no_persp([0.25, 0.75, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([ 1.00, 1.00,0])); v2.uv.assign(idn.transform_coord_no_persp([0.75, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
+    v0.position.assign(idn.transform_coord_no_persp([-1.00,-1.00,0])); v0.uv.assign(idn.transform_coord_no_persp([0.25, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([ 1.00,-1.00,0])); v1.uv.assign(idn.transform_coord_no_persp([0.75, 0.25, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([-1.00, 1.00,0])); v2.uv.assign(idn.transform_coord_no_persp([0.25, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
+  elif False:
+    v0.position.assign(idn.transform_coord_no_persp([ 1.00,-1.00,0])); v0.uv.assign(rot.transform_coord_no_persp([0.75, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([-1.00, 1.00,0])); v1.uv.assign(rot.transform_coord_no_persp([0.25, 0.75, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([ 1.00, 1.00,0])); v2.uv.assign(rot.transform_coord_no_persp([0.75, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
+    v0.position.assign(idn.transform_coord_no_persp([-1.00,-1.00,0])); v0.uv.assign(rot.transform_coord_no_persp([0.25, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([ 1.00,-1.00,0])); v1.uv.assign(rot.transform_coord_no_persp([0.75, 0.25, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([-1.00, 1.00,0])); v2.uv.assign(rot.transform_coord_no_persp([0.25, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
+  elif True:
+    rot2 = m.MMat4x4(rot)
+    rot2.scale = rot2.scale.inverted()
+    rot2 = rot2 * m.MMat4x4(rotation(m.deg_to_rad(0.0), 0.0, 0.0))
+    rot.scale = m.MVec3(1.0, 1.0, 1.0)
+    rot.translate = m.MVec3(0.0, 0.0, 0.0)
+    #rot.rotate = m.MMat3x3()
+    rot *= m.MMat4x4(m.MMat3x3(), 3.0 * m.MVec3(0.00, 0.50, 0.0))
+    rot *= m.MMat4x4(m.MMat3x3(), m.MVec3( 0.5,  0.5, 0.0))
+    rot *= m.MMat4x4(rotation(m.deg_to_rad(20.0), 0.0, 0.0))
+    rot.scale *= 3.0
+    rot *= m.MMat4x4(m.MMat3x3(), m.MVec3(-0.5, -0.5, 0.0))
+    # s0, s1 = 0.25, 0.75
+    # t0, t1 = 0.25, 0.75
+    s0, s1 = 0.0, 1.0
+    t0, t1 = 0.0, 1.0
+    x0, x1 = -1.0, 1.0
+    y0, y1 = -1.0, 1.0
+    x0 *= 0.9
+    x1 *= 0.9
+    y0 *= 0.9
+    y1 *= 0.9
+    rot2 = m.MMat4x4()
+    rot2 *= m.MMat4x4(rotation(m.deg_to_rad(20.0), 0.0, 0.0))
+    v0.position.assign(rot2.transform_coord_no_persp([ x1, y0,0])); v0.uv.assign(rot.transform_coord_no_persp([s1, t0, 0]))
+    v1.position.assign(rot2.transform_coord_no_persp([ x0, y1,0])); v1.uv.assign(rot.transform_coord_no_persp([s0, t1, 0]))
+    v2.position.assign(rot2.transform_coord_no_persp([ x1, y1,0])); v2.uv.assign(rot.transform_coord_no_persp([s1, t1, 0]))
+    color = rast.draw([v0, v1, v2], color)
+    v0.position.assign(rot2.transform_coord_no_persp([ x0, y0,0])); v0.uv.assign(rot.transform_coord_no_persp([s0, t0, 0]))
+    v1.position.assign(rot2.transform_coord_no_persp([ x1, y0,0])); v1.uv.assign(rot.transform_coord_no_persp([s1, t0, 0]))
+    v2.position.assign(rot2.transform_coord_no_persp([ x0, y1,0])); v2.uv.assign(rot.transform_coord_no_persp([s0, t1, 0]))
+    color = rast.draw([v0, v1, v2], color)
+  elif True:
+    v0.position.assign(idn.transform_coord_no_persp([ 0.75,-0.75,0])); v0.uv.assign(rot.transform_coord_no_persp([0.75, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([-0.75, 0.75,0])); v1.uv.assign(rot.transform_coord_no_persp([0.25, 0.75, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([ 0.75, 0.75,0])); v2.uv.assign(rot.transform_coord_no_persp([0.75, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
+    v0.position.assign(idn.transform_coord_no_persp([-0.75,-0.75,0])); v0.uv.assign(rot.transform_coord_no_persp([0.25, 0.25, 0]))
+    v1.position.assign(idn.transform_coord_no_persp([ 0.75,-0.75,0])); v1.uv.assign(rot.transform_coord_no_persp([0.75, 0.25, 0]))
+    v2.position.assign(idn.transform_coord_no_persp([-0.75, 0.75,0])); v2.uv.assign(rot.transform_coord_no_persp([0.25, 0.75, 0]))
+    color = rast.draw([v0, v1, v2], color)
 
-#   v0.position.assign([0.5+ 1.0,0.5+-1.0,0]); v0.uv.assign(rot.rotate_point([1.0, 0.0, 0]))
-#   v1.position.assign([0.5+-1.0,0.5+ 1.0,0]); v1.uv.assign(rot.rotate_point([0.0, 1.0, 0]))
-#   v2.position.assign([0.5+ 1.0,0.5+ 1.0,0]); v2.uv.assign(rot.rotate_point([1.0, 1.0, 0]))
+#   v0.position.assign([0.5+ 1.0,0.5+-1.0,0]); v0.uv.assign(rot.transform_coord_no_persp([1.0, 0.0, 0]))
+#   v1.position.assign([0.5+-1.0,0.5+ 1.0,0]); v1.uv.assign(rot.transform_coord_no_persp([0.0, 1.0, 0]))
+#   v2.position.assign([0.5+ 1.0,0.5+ 1.0,0]); v2.uv.assign(rot.transform_coord_no_persp([1.0, 1.0, 0]))
 #   color = rast.draw([v0, v1, v2], color)
-#   v0.position.assign(rot.rotate_point([0.5+-1.0,0.5+-1.0,0])); v0.uv.assign([0.0, 0.0, 0])
-#   v1.position.assign(rot.rotate_point([0.5+ 1.0,0.5+-1.0,0])); v1.uv.assign([1.0, 0.0, 0])
-#   v2.position.assign(rot.rotate_point([0.5+-1.0,0.5+ 1.0,0])); v2.uv.assign([0.0, 1.0, 0])
+#   v0.position.assign(rot.transform_coord_no_persp([0.5+-1.0,0.5+-1.0,0])); v0.uv.assign([0.0, 0.0, 0])
+#   v1.position.assign(rot.transform_coord_no_persp([0.5+ 1.0,0.5+-1.0,0])); v1.uv.assign([1.0, 0.0, 0])
+#   v2.position.assign(rot.transform_coord_no_persp([0.5+-1.0,0.5+ 1.0,0])); v2.uv.assign([0.0, 1.0, 0])
 #   color = rast.draw([v0, v1, v2], color)
 
-  #v0.position.assign([-0.5,0.0,0]); v0.uv.assign(rot.rotate_point([0.5, 0.5, 0]))
-  #v1.position.assign([0.3,0.0,0]); v1.uv.assign(rot.rotate_point([1.0, 0.3, 0]))
-  #v2.position.assign([0.0,1.0,0]); v2.uv.assign(rot.rotate_point([0.3, 1.0, 0]))
+  #v0.position.assign([-0.5,0.0,0]); v0.uv.assign(rot.transform_coord_no_persp([0.5, 0.5, 0]))
+  #v1.position.assign([0.3,0.0,0]); v1.uv.assign(rot.transform_coord_no_persp([1.0, 0.3, 0]))
+  #v2.position.assign([0.0,1.0,0]); v2.uv.assign(rot.transform_coord_no_persp([0.3, 1.0, 0]))
   img2 = sess.run(color)
   with open(args[1], 'wb') as f:
+    img2[0][0] = [0xFF, 0x00, 0xFF, 0xFF]
     f.write(sess.run(tf.image.encode_png(img2)))
     
 

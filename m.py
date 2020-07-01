@@ -139,6 +139,17 @@ class MVec3(MData):
                   _data[ 2 ]*v._data[ 0 ] - _data[ 0 ]*v._data[ 2 ],
                   _data[ 0 ]*v._data[ 1 ] - _data[ 1 ]*v._data[ 0 ] );
 
+  def invert(self):
+    self.x = 1.0 / self.x
+    self.y = 1.0 / self.y
+    self.z = 1.0 / self.z
+
+  def inverted(self):
+    r = self.__class__(self)
+    r.invert()
+    return r
+
+
 
 class MMat3x3(MData):
   def __init__(self, *args):
