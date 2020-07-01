@@ -26,7 +26,7 @@ def wrap(v, wrap_mode="reflect"):
   if wrap_mode == "wrap":
     return tf.math.floormod(v, 1.0)
   elif wrap_mode == "reflect":
-    return tf.abs(tf.math.floormod(v, 2.0) - 1.0)
+    return 1.0 - tf.abs(tf.math.floormod(v, 2.0) - 1.0)
   elif wrap_mode == "clamp":
     return clamp(v)
 
