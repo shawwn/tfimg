@@ -104,6 +104,12 @@ def tf_random_translate(imgs, x_strength=0.5, y_strength=0.5, data_format="NHWC"
   return tf_image_translate(imgs, x_offset, y_offset, data_format=data_format, wrap_mode=wrap_mode)
 
 
+@op_scope
+def tf_image_augment(imgs, data_format="NHWC"):
+  imgs = tf_random_translate(imgs, data_format=data_format)
+  return imgs
+
+
 if __name__ == "__main__":
   import sys
   args = sys.argv[1:]
@@ -140,7 +146,7 @@ if __name__ == "__main__":
   #print('y', y)
 
   #color = tf_image_translate(imgs, x, y, data_format="NCHW")
-  color = tf_random_translate(imgs, data_format="NCHW")
+  color = tf_image_augment(imgs, data_format="NCHW")
   color = tf.transpose(color, [0, 2, 3, 1]) # NCHW to NHWC
   
 
