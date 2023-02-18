@@ -180,20 +180,38 @@ class Rasterizer:
 
     p = tf.boolean_mask(p, valid)
 
-    tex0 = tf.cast(self.tex0, tf.float32)
     th, tw = self.tex0.shape[0:2]
-    R, G, B = tf.unstack(
-        tf.gather_nd(tex0,
+    dst = (1/255.0) * main.f32(tf.boolean_mask(color, valid))
+    src = (1/255.0) * main.f32(self.tex0)
+    Rd, Gd, Bd,  Ad = tf.unstack(dst, axis=-1)
+    Rs, Gs, Bs, *As = tf.unstack(
+        tf.gather_nd(src,
           main.clamp(
-            main.iround(main.wrap(uv, "reflect") * [tw, th]),
-            0, [tw-1, th-1])),
+            main.iround(main.wrap(uv, "reflect") * [th, tw]),
+            0, [th-1, tw-1])),
           axis=-1)
+    As = As[0] if As else tf.ones_like(Rs)
+    #As *= 0.2
+    As *= 0.7
 
-    A = tf.ones_like(R) * 255
-    frag_color = tf.stack([R, G, B, A], 1)
+    # # DestinationColor.rgb = ((SourceColor.rgb * SourceColor.a) * One) + (DestinationColor.rgb * (1 - SourceColor.a));
+    # Rd = Rs * As + Rd * (255.0 - As)
+    # Gd = Gs * As + Gd * (255.0 - As)
+    # Bd = Bs * As + Bd * (255.0 - As)
 
-    color = tf.tensor_scatter_update(color, p, frag_color)
-    color = main.clamp(color, 0.0, 255.0)
+    # https://www.w3.org/TR/2012/WD-compositing-20120816/
+
+    # co = cs + cb x (1 - αs)
+    Rd   = Rs + Rd * (1 - As)
+    Gd   = Gs + Gd * (1 - As)
+    Bd   = Bs + Bd * (1 - As)
+
+    # αo = αs + αb x (1 - αs)
+    Ad   = As + Ad * (1 - As)
+
+    frag_color = 255 * main.clamp(tf.stack([Rd, Gd, Bd, Ad], 1), 0.0, 1.0)
+
+    color = tf.tensor_scatter_nd_update(color, p, frag_color)
 
     return color
 
@@ -225,26 +243,34 @@ def rotation(x, y, z):
 if __name__ == "__main__":
   import sys
   args = sys.argv[1:]
-  sess = tf.InteractiveSession()
   with open(args[0], 'rb') as f:
-    img = sess.run(tf.io.decode_image(f.read(), channels=3))
+    img = tf.io.decode_image(f.read(), channels=4)
+    img = tf.cast(img, tf.float32) / 255.0
+    img = tf.concat([img[..., 0:3] * img[..., 3:4], img[..., 3:4]], axis=-1)
+    img = tf.cast(tf.clip_by_value(img, 0.0, 1.0) * 255.0, tf.uint8)
+
+  W, H, *C = np.shape(img)
+  A = H / W
+
   outfile = args[1]
   # w = 20 if len(args) <= 2 else int(args[2])
   # h = 20 if len(args) <= 3 else int(args[3])
   # method = "area" if len(args) <= 4 else args[4]
   # wrap_mode = "reflect" if len(args) <= 5 else args[5]
-  # img2 = sess.run(resize(img, [w, h], method=method, wrap_mode=wrap_mode))
+  # img2 = resize(img, [w, h], method=method, wrap_mode=wrap_mode)
   v0 = SPolygonVertex()
   v1 = SPolygonVertex()
   v2 = SPolygonVertex()
   #w = 640//4
   #h = 480//4
-  w = 160
-  h = 160
+  w = 4*160
+  h = 4*160
   th = m.deg_to_rad(0.0)
   rot = m.MMat4x4(rotation(th, 0.0, 0.0))
   rot.scale = 2.0 * rot.scale
   rot.translate = 0.5 + rot.translate
+  uvmat = m.MMat4x4()
+  uvmat.scale = m.MVec3(1.0, A, 1.0)
   #rot = m.MMat3x3()
   idn = m.MMat4x4()
   rast = Rasterizer(w, h)
@@ -302,7 +328,7 @@ if __name__ == "__main__":
   elif True:
     rot2 = m.MMat4x4(rot)
     rot2.scale = rot2.scale.inverted()
-    rot2 = rot2 * m.MMat4x4(rotation(m.deg_to_rad(0.0), 0.0, 0.0))
+    rot2 = rot2 @ m.MMat4x4(rotation(m.deg_to_rad(0.0), 0.0, 0.0))
     rot.scale = m.MVec3(1.0, 1.0, 1.0)
     rot.translate = m.MVec3(0.0, 0.0, 0.0)
     #rot.rotate = m.MMat3x3()
@@ -321,16 +347,19 @@ if __name__ == "__main__":
     x1 *= 0.9
     y0 *= 0.9
     y1 *= 0.9
+    #rot = uvmat * rot
+    rot = uvmat
     rot2 = m.MMat4x4()
-    rot2 *= m.MMat4x4(rotation(m.deg_to_rad(20.0), 0.0, 0.0))
-    v0.position.assign(rot2.transform_coord_no_persp([ x1, y0,0])); v0.uv.assign(rot.transform_coord_no_persp([s1, t0, 0]))
-    v1.position.assign(rot2.transform_coord_no_persp([ x0, y1,0])); v1.uv.assign(rot.transform_coord_no_persp([s0, t1, 0]))
-    v2.position.assign(rot2.transform_coord_no_persp([ x1, y1,0])); v2.uv.assign(rot.transform_coord_no_persp([s1, t1, 0]))
-    color = rast.draw([v0, v1, v2], color)
-    v0.position.assign(rot2.transform_coord_no_persp([ x0, y0,0])); v0.uv.assign(rot.transform_coord_no_persp([s0, t0, 0]))
-    v1.position.assign(rot2.transform_coord_no_persp([ x1, y0,0])); v1.uv.assign(rot.transform_coord_no_persp([s1, t0, 0]))
-    v2.position.assign(rot2.transform_coord_no_persp([ x0, y1,0])); v2.uv.assign(rot.transform_coord_no_persp([s0, t1, 0]))
-    color = rast.draw([v0, v1, v2], color)
+    for i in range(3):
+      rot2 *= m.MMat4x4(rotation(m.deg_to_rad(20.0), 0.0, 0.0))
+      v0.position.assign(rot2.transform_coord_no_persp([ x1, y0,0])); v0.uv.assign(rot.transform_coord_no_persp([s1, t0, 0]))
+      v1.position.assign(rot2.transform_coord_no_persp([ x0, y1,0])); v1.uv.assign(rot.transform_coord_no_persp([s0, t1, 0]))
+      v2.position.assign(rot2.transform_coord_no_persp([ x1, y1,0])); v2.uv.assign(rot.transform_coord_no_persp([s1, t1, 0]))
+      color = rast.draw([v0, v1, v2], color)
+      v0.position.assign(rot2.transform_coord_no_persp([ x0, y0,0])); v0.uv.assign(rot.transform_coord_no_persp([s0, t0, 0]))
+      v1.position.assign(rot2.transform_coord_no_persp([ x1, y0,0])); v1.uv.assign(rot.transform_coord_no_persp([s1, t0, 0]))
+      v2.position.assign(rot2.transform_coord_no_persp([ x0, y1,0])); v2.uv.assign(rot.transform_coord_no_persp([s0, t1, 0]))
+      color = rast.draw([v0, v1, v2], color)
   elif True:
     v0.position.assign(idn.transform_coord_no_persp([ 0.75,-0.75,0])); v0.uv.assign(rot.transform_coord_no_persp([0.75, 0.25, 0]))
     v1.position.assign(idn.transform_coord_no_persp([-0.75, 0.75,0])); v1.uv.assign(rot.transform_coord_no_persp([0.25, 0.75, 0]))
@@ -353,9 +382,10 @@ if __name__ == "__main__":
   #v0.position.assign([-0.5,0.0,0]); v0.uv.assign(rot.transform_coord_no_persp([0.5, 0.5, 0]))
   #v1.position.assign([0.3,0.0,0]); v1.uv.assign(rot.transform_coord_no_persp([1.0, 0.3, 0]))
   #v2.position.assign([0.0,1.0,0]); v2.uv.assign(rot.transform_coord_no_persp([0.3, 1.0, 0]))
-  img2 = sess.run(color)
+  img2 = tf.cast(color, tf.uint8).numpy()
+  img2[0][0] = [0xFF, 0x00, 0xFF, 0xFF]
+  data = tf.image.encode_png(img2).numpy()
   with open(args[1], 'wb') as f:
-    img2[0][0] = [0xFF, 0x00, 0xFF, 0xFF]
-    f.write(sess.run(tf.image.encode_png(img2)))
+    f.write(data)
     
 
